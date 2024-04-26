@@ -10,6 +10,7 @@ from overrides import overrides
 
 from .. import types
 from ..base import DynamicsModel, Filter, ParticleFilterMeasurementModel
+torch.autograd.set_detect_anomaly(True)
 
 
 class ParticleFilter(Filter):
@@ -96,6 +97,7 @@ class ParticleFilter(Filter):
             .sample((M,))
             .transpose(0, 1)
         )
+        print(f"Particles initialized with version : {self.particle_states._version}")
         assert self.particle_states.shape == (N, M, self.state_dim)
 
         # Normalize weights
@@ -129,6 +131,8 @@ class ParticleFilter(Filter):
 
         # Make sure our particle filter's been initialized
         assert self._initialized, "Particle filter not initialized!"
+
+        print(f"At beginning of forward, particles have version : {self.particle_states._version}")
 
         # Get our batch size (N), current particle count (M), & state dimension
         N, M, state_dim = self.particle_states.shape
@@ -205,6 +209,8 @@ class ParticleFilter(Filter):
         )
         assert self.particle_states.shape == (N, M, self.state_dim)
 
+        print(f"After resampling, particles have version : {self.particle_states._version}")
+
         # Re-weight particles using observations
         self.particle_log_weights = self.particle_log_weights + self.measurement_model(
             states=self.particle_states,
@@ -216,14 +222,24 @@ class ParticleFilter(Filter):
             self.particle_log_weights, dim=1, keepdim=True
         )
 
+        print(f"After re-weighting, particles have version : {self.particle_states._version}")
+
         # Compute output
         state_estimates: types.StatesTorch
         if self.estimation_method == "weighted_average":
-            state_estimates = torch.sum(
-                torch.exp(self.particle_log_weights[:, :, np.newaxis])
-                * self.particle_states,
-                dim=1,
-            )
+
+            # First we expand our particle weights to be 3D
+            expanded_weights = self.particle_log_weights.unsqueeze(2)
+
+            print(f"Expanded weights have version : {expanded_weights._version}")
+
+            # Then we multiply each particle against its state 
+            weighted_states = self.particle_states * torch.exp(expanded_weights)
+
+            print(f"Weighted states have version : {weighted_states._version}")
+            print(f"Particle states have version : {self.particle_states._version}")
+
+            state_estimates = torch.sum(weighted_states, dim=1) 
         elif self.estimation_method == "argmax":
             best_indices = torch.argmax(self.particle_log_weights, dim=1)
             state_estimates = torch.gather(
